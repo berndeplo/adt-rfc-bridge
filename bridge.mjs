@@ -146,6 +146,7 @@ const cfg = {
 
 if (!existsSync(cfg.jcoLibsDir)) {
   log(`[bridge] JCO_LIBS_DIR does not exist: ${cfg.jcoLibsDir}`);
+  log(`[bridge] Run \`npm run setup\` to copy the SAP JCo libraries from your Eclipse ADT install.`);
   process.exit(2);
 }
 

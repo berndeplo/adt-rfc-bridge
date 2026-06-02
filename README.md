@@ -18,6 +18,9 @@ ADT cookies / CSRF / stateful session handling stay in arc-1 — the bridge is j
 - Java 21+ runtime (Java 25 known to work; the proxy needs `--enable-native-access=ALL-UNNAMED`)
 - Eclipse with ABAP Development Tools (ADT) installed locally — this is where
   `npm run setup` sources the SAP JCo libraries from (see below)
+- Platform: `npm run setup` runs on macOS, Linux, and Windows, but the bridge
+  runtime itself currently targets macOS/Linux (it uses `pgrep` and
+  `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH`)
 
 ## Installation
 

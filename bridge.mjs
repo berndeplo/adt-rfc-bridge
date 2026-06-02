@@ -2,7 +2,7 @@
 // adt-rfc-bridge
 //
 // Local HTTP server that translates plain ADT REST requests into ProxyRequest
-// envelopes for vsp's jco-proxy.jar, which executes them against the SAP system
+// envelopes for the bundled jco-proxy.jar, which executes them against the SAP system
 // via JCo / RFC (SADT_REST_RFC_ENDPOINT). Lets HTTP-only ADT clients reach
 // RFC-only SAP systems.
 //

@@ -25,7 +25,7 @@
 - Modify: `README.md` — installation flow, JCo acquisition section, accurate jco-proxy provenance
 
 Source of truth for vendored files (this machine only):
-`/Users/benjamin.bockmuehl/eclipse/Eclipse-MCP/mcp-abap-adt/jco-proxy/`
+`$HOME/eclipse/Eclipse-MCP/mcp-abap-adt/jco-proxy/`
 
 ---
 
@@ -44,7 +44,7 @@ Source of truth for vendored files (this machine only):
 - [ ] **Step 1: Copy the module source tree**
 
 ```bash
-SRC=/Users/benjamin.bockmuehl/eclipse/Eclipse-MCP/mcp-abap-adt/jco-proxy
+SRC=$HOME/eclipse/Eclipse-MCP/mcp-abap-adt/jco-proxy
 mkdir -p jco-proxy
 cp "$SRC/pom.xml" jco-proxy/pom.xml
 mkdir -p jco-proxy/src/main/java/com/sap/mcp/proxy/config jco-proxy/src/main/java/com/sap/mcp/proxy/model

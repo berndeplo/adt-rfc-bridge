@@ -73,9 +73,13 @@ const warn = (s) => `⚠ ${s}`;
 process.stdout.write('\nadt-rfc-bridge setup\n====================\n');
 process.stdout.write(`${ok(`JCo found in: ${found.dir}`)}\n`);
 process.stdout.write(`${ok(`Copied ${basename(found.jcoJar)} + ${basename(found.nativeJar)} (${found.architecture}) -> jco-libs/`)}\n`);
+const javaMajor = java ? Number(java.split('.')[0]) : 0;
 process.stdout.write(
-  java ? `${ok(`Java: ${java}`)}\n`
-       : `${warn('Java not found on PATH — install a JRE/JDK 21+ before `npm start`.')}\n`,
+  !java
+    ? `${warn('Java not found on PATH — install a JRE/JDK 21+ before `npm start`.')}\n`
+    : javaMajor > 0 && javaMajor < 21
+      ? `${warn(`Java ${java} detected — bridge requires 21+. Upgrade before \`npm start\`.`)}\n`
+      : `${ok(`Java: ${java}`)}\n`,
 );
 process.stdout.write(
   existsSync(proxyJar) ? `${ok(`jco-proxy.jar present (${(statSync(proxyJar).size / 1e6).toFixed(1)} MB)`)}\n`

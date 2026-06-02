@@ -30,9 +30,8 @@ function checkJava() {
 
 // 1. Detect JCo from Eclipse.
 const prefix = getPlatformPrefix();
-const candidates = process.env.ECLIPSE_HOME
-  ? [join(process.env.ECLIPSE_HOME, 'plugins'), ...getEclipsePaths()]
-  : getEclipsePaths();
+// ECLIPSE_HOME is already honored (and prioritized) inside getEclipsePaths().
+const candidates = getEclipsePaths();
 const found = detectJCoLibraries({
   dirs: candidates,
   readdir: (d) => readdirSync(d),

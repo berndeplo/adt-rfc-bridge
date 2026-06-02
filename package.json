@@ -1,0 +1,13 @@
+{
+  "name": "adt-rfc-bridge",
+  "version": "0.1.0",
+  "description": "Local HTTP bridge that proxies ADT REST calls through vsp's jco-proxy.jar over JCo/RFC — lets HTTP-only ADT clients (arc-1) reach RFC-only SAP systems",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node --env-file=.env bridge.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

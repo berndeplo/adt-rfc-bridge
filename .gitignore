@@ -6,3 +6,5 @@ node_modules/
 jco-libs/
 # Maven build output
 jco-proxy/target/
+jco-proxy/dependency-reduced-pom.xml
+jco-proxy/dist/

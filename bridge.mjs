@@ -131,7 +131,7 @@ await ensureNotAlreadyRunning(bridgePort);
 const cfg = {
   bridgePort,
   java: getenv('JAVA', 'java'),
-  jcoLibsDir: required('JCO_LIBS_DIR'),
+  jcoLibsDir: getenv('JCO_LIBS_DIR', join(__dirname, 'jco-libs')),
   asHost: process.env.SAP_ASHOST,
   sysNr: process.env.SAP_SYSNR,
   msHost: process.env.SAP_MSHOST,
@@ -149,9 +149,13 @@ if (!existsSync(cfg.jcoLibsDir)) {
   process.exit(2);
 }
 
-const proxyJar = join(cfg.jcoLibsDir, 'jco-proxy.jar');
-if (!existsSync(proxyJar)) {
-  log(`[bridge] jco-proxy.jar not found at: ${proxyJar}`);
+const proxyJarCandidates = [
+  join(__dirname, 'jco-proxy.jar'),
+  join(cfg.jcoLibsDir, 'jco-proxy.jar'),
+];
+const proxyJar = proxyJarCandidates.find((p) => existsSync(p));
+if (!proxyJar) {
+  log(`[bridge] jco-proxy.jar not found (looked in: ${proxyJarCandidates.join(', ')})`);
   process.exit(2);
 }
 

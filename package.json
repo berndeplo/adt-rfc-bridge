@@ -5,7 +5,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node --env-file=.env bridge.mjs"
+    "setup": "node scripts/setup.mjs",
+    "start": "node --env-file=.env bridge.mjs",
+    "test": "node --test 'scripts/*.test.mjs'"
   },
   "engines": {
     "node": ">=22"

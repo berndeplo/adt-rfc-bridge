@@ -21,6 +21,18 @@ export function getPlatformPrefix(platform = process.platform) {
   }
 }
 
+// Filename of the native JCo shared library that must sit on java.library.path.
+// It ships *inside* the platform fragment jar (e.g. lib/libsapjco3.dylib) and
+// has to be extracted as a loose file for the JVM's native loader to find it.
+export function getNativeLibName(platform = process.platform) {
+  switch (platform) {
+    case 'darwin': return 'libsapjco3.dylib';
+    case 'linux': return 'libsapjco3.so';
+    case 'win32': return 'sapjco3.dll';
+    default: throw new Error(`Unsupported platform: ${platform}`);
+  }
+}
+
 // Given a flat list of plugin filenames, return the JCo core + native jar names
 // and the architecture string (e.g. "macosx.aarch64"), or null if either is missing.
 export function matchJcoJars(files, prefix) {

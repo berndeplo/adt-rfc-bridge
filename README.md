@@ -45,6 +45,39 @@ finds `com.sap.conn.jco_*.jar` plus the platform-native fragment for your OS, an
 copies both into `./jco-libs/`. No npm dependencies are installed — the bridge
 runs on Node built-ins only.
 
+### Switching SAP clients
+
+`npm start` loads `.env`. An optional argument selects `.env.<suffix>` instead:
+
+```sh
+npm start        # → .env
+npm start 020    # → .env.020
+```
+
+The suffix is by convention the client number, but the client actually used is
+whatever `SAP_CLIENT` that file sets. Create the second file by copying `.env`,
+changing `SAP_CLIENT`, and setting the password for that client (user master
+records are per client, so it may differ).
+
+Keep `BRIDGE_PORT` identical — sharing the port is what makes this a *switch*
+rather than two bridges. Start a second one and it reports the running bridge
+instead of competing for the port: same client, it tails that bridge's log;
+different client, it refuses to start and tells you which pid to stop. Give the
+files different ports and you get two independent bridges instead, but note that
+starting one currently reaps the other's `jco-proxy` sidecar. `.gitignore` covers
+`.env.*`, so per-client files stay out of git.
+
+Always quote the password — `SAP_PASSWORD="..."` — because Node's env-file
+parser treats an unquoted `#` as a comment and silently truncates the value,
+which SAP then reports as `Name or password is incorrect (repeat logon)`.
+
+Note that the ABAP repository is cross-client: classes, programs, DDIC and CDS
+objects are the same in every client *of that system*. Only client-dependent
+data (application tables, client-dependent Customizing) and your authorizations
+differ. A second client is therefore not a code sandbox — activating a class in
+one client changes it for all of them — and because source looks identical
+either way, there is no visual cue telling you which client you are in.
+
 ### How the JCo libraries are obtained
 
 The SAP JCo libraries (`com.sap.conn.jco_*.jar` and the native `libsapjco3.*`
@@ -53,8 +86,11 @@ redistributable**, so this repo does not ship them. They are, however, bundled
 inside every Eclipse ADT installation's `plugins/` directory (and downloadable
 from SAP's "SAP Java Connector" area with an S-user). `npm run setup` copies them
 out of your local ADT install into `./jco-libs/` (which is gitignored). The
-correct native library for your platform is selected automatically; JCo 3.1
-self-extracts it at runtime, so there is no manual `.dylib`/`.so`/`.dll` step.
+correct fragment for your platform is selected automatically, and setup also
+extracts the native `libsapjco3.*` out of that jar as a loose file — the JVM's
+native loader has to find it on `java.library.path`, otherwise the proxy dies
+with `UnsatisfiedLinkError: no sapjco3 in java.library.path`. Either way there
+is no manual `.dylib`/`.so`/`.dll` step for you.
 
 If setup can't find them, install Eclipse ADT or set `ECLIPSE_HOME` to your
 Eclipse directory and re-run `npm run setup`.

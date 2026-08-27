@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "setup": "node scripts/setup.mjs",
-    "start": "node --env-file=.env bridge.mjs",
+    "start": "node bridge.mjs",
     "test": "node --test 'scripts/*.test.mjs'"
   },
   "engines": {

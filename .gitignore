@@ -1,4 +1,7 @@
 .env
+.env.*
+!.env.example
+.bridge.state
 node_modules/
 *.log
 

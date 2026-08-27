@@ -140,7 +140,12 @@ const envExample = join(repoRoot, '.env.example');
 let scaffolded = false;
 if (!existsSync(envPath) && existsSync(envExample)) {
   copyFileSync(envExample, envPath);
-  chmodSync(envPath, 0o600); // it is about to hold a SAP password
+  try {
+    chmodSync(envPath, 0o600); // it is about to hold a SAP password
+  } catch {
+    // Best-effort: filesystems without POSIX permissions must not abort a setup
+    // whose actual work is already done.
+  }
   scaffolded = true;
 }
 

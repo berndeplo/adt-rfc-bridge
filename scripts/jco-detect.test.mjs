@@ -59,7 +59,7 @@ test('getEclipsePaths puts ECLIPSE_HOME first and includes platform standards', 
     'win32',
   );
   // path.join uses the OS separator; on POSIX hosts the tail uses '/'
-  assert.ok(win.some((p) => p.startsWith('C:\\Users\\x') && p.endsWith('Eclipse/plugins') || p.endsWith('Eclipse\\plugins')));
+  assert.ok(win.some((p) => p.startsWith('C:\\Users\\x') && (p.endsWith('Eclipse/plugins') || p.endsWith('Eclipse\\plugins'))));
   assert.ok(win.some((p) => p.includes('AppData') && (p.endsWith('Eclipse/plugins') || p.endsWith('Eclipse\\plugins'))));
 
   const linux = getEclipsePaths({ HOME: '/home/x' }, 'linux');

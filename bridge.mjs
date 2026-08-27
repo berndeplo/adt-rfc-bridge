@@ -375,7 +375,7 @@ push('--group', cfg.group);
 push('--client', cfg.client);
 push('--user', cfg.user);
 push('--password', cfg.password);
-push('--language', cfg.language);
+push('--lang', cfg.language); // ConnectionConfig parses --lang, not --language
 
 // If a previous bridge died via SIGKILL its jco-proxy child can be orphaned
 // and still hold its Jetty port. Reap any orphan before launching a new one.
@@ -391,7 +391,7 @@ for (const pid of orphanPids) {
 }
 
 // Substitute rather than drop: filtering the element out left the log reading
-// `--password --language EN`, as if --language were the password's value.
+// `--password --lang EN`, as if --lang were the password's value.
 const logArgs = args.map((a) => (a === cfg.password ? '***' : a));
 log(`[bridge] starting jco-proxy: ${cfg.java} ${logArgs.join(' ')}`);
 

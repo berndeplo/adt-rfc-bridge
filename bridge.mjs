@@ -11,13 +11,86 @@
 
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
-import { readdirSync, existsSync, createWriteStream } from 'node:fs';
+import {
+  readdirSync, existsSync, createWriteStream, appendFileSync, readFileSync, writeFileSync, unlinkSync,
+} from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { auditEnvFile, resolveEnvFile } from './scripts/env-file.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LOG_PATH = join(__dirname, '.bridge.log');
+// Records which client the live bridge serves, so a second start can say so
+// instead of guessing from a shared port.
+const STATE_PATH = join(__dirname, '.bridge.state');
+
+// Which SAP client to connect as is chosen by an optional argument:
+//   npm start        → .env
+//   npm start 020    → .env.020
+// The suffix is by convention the client number; the client actually used is
+// whatever SAP_CLIENT that file sets. If both files pin the same BRIDGE_PORT
+// (the intended setup — nothing in the code enforces it), starting a second
+// bridge hits EADDRINUSE and reports the running one instead of starting.
+//
+// Node's env-file loader does not overwrite variables already present in the
+// real environment, so a shell export or an explicit `--env-file` wins over the
+// chosen file. Precedence is per-variable, which is why an omitted variable can
+// be backfilled from somewhere you didn't intend — auditEnvFile reports both
+// that and the unquoted-'#' truncation below.
+if (typeof process.loadEnvFile !== 'function') {
+  process.stderr.write(
+    `[bridge] Node ${process.version} is too old — the bridge needs Node 22+.\n` +
+      '[bridge] A system node (e.g. /usr/local/bin/node) may be shadowing your nvm node; check `node -v`.\n',
+  );
+  process.exit(2);
+}
+const envArg = process.argv[2];
+const shellKeys = new Set(Object.keys(process.env));
+let envFile = null;
+try {
+  // With no argument the default `.env` is optional: an explicit
+  // `node --env-file=... bridge.mjs` or a fully exported environment already
+  // supplies everything, and loading `.env` underneath it would backfill the
+  // variables that file deliberately omits — e.g. lending client 010's password
+  // to a 020 session, which lands right back on "Name or password is incorrect".
+  if (envArg !== undefined || !shellKeys.has('SAP_USER')) {
+    envFile = resolveEnvFile(envArg, __dirname);
+    process.loadEnvFile(envFile);
+  }
+} catch (err) {
+  // Prefix every line — the not-found message carries an `available: ...` line.
+  process.stderr.write(String(err.message).split('\n').map((l) => `[bridge] ${l}\n`).join(''));
+  process.exit(2);
+}
+
+if (envFile) {
+  const { truncated, shadowed } = auditEnvFile(envFile, process.env, shellKeys);
+  if (truncated.length) {
+    for (const { key, fileLength, parsedLength } of truncated) {
+      process.stderr.write(
+        `[bridge] ${key} in ${envFile} is unquoted and contains '#', so Node's env-file parser\n`
+        + `[bridge] kept only ${parsedLength} of ${fileLength} characters. SAP would report that as\n`
+        + `[bridge] "Name or password is incorrect (repeat logon)". Quote it: ${key}="..."\n`,
+      );
+    }
+    process.exit(2);
+  }
+  if (shadowed.length) {
+    process.stderr.write(
+      `[bridge] WARNING: your shell environment overrides ${shadowed.join(', ')} from\n`
+      + `[bridge] ${envFile}. Run \`unset ${shadowed.join(' ')}\` to use the file's values.\n`,
+    );
+    // Connecting as the wrong client is the worst version of this: the ABAP
+    // repository is cross-client, so nothing in the source would look wrong.
+    if (envArg !== undefined && shadowed.includes('SAP_CLIENT')) {
+      process.stderr.write(
+        `[bridge] Refusing to start: you asked for '${envArg}' but SAP_CLIENT is pinned by the shell.\n`,
+      );
+      process.exit(2);
+    }
+  }
+}
 
 // ANSI yellow + bold.
 const YELLOW = '\x1b[33;1m';
@@ -52,8 +125,17 @@ function getenv(key, fallback) {
 
 function required(key) {
   const v = process.env[key];
-  if (!v) {
+  if (v === undefined) {
     process.stderr.write(`[bridge] missing required env var: ${key}\n`);
+    process.exit(2);
+  }
+  // Present but empty is a different diagnosis: the line is right there in the
+  // file, so "missing" would send the reader looking for the wrong thing.
+  if (v === '') {
+    process.stderr.write(
+      `[bridge] ${key} is set but parsed as empty — a leading unquoted '#' starts a comment. `
+      + `Quote it: ${key}="..."\n`,
+    );
     process.exit(2);
   }
   return v;
@@ -67,21 +149,87 @@ function getLogStream() {
   if (!logStream) logStream = createWriteStream(LOG_PATH, { flags: 'a' });
   return logStream;
 }
+// Local-time timestamp, e.g. "2026-06-23 16:06:08.123" — matches the shell's
+// local clock rather than UTC so it lines up with what the user sees.
+function ts() {
+  const d = new Date();
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} `
+    + `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
 function log(msg) {
-  const line = msg.endsWith('\n') ? msg : `${msg}\n`;
+  const line = `${ts()} ${msg.endsWith('\n') ? msg : `${msg}\n`}`;
   process.stderr.write(line);
   getLogStream().write(line);
 }
-function logChunk(prefix, chunk) {
-  const text = `${prefix}${chunk}`;
-  process.stderr.write(text);
-  getLogStream().write(text);
+// process.exit() does not drain a pending WriteStream — of several writes queued
+// in the same tick only the first reaches the file — so the shutdown paths, which
+// carry the reason the bridge died, write to the log synchronously instead.
+function logSync(msg) {
+  const line = `${ts()} ${msg.endsWith('\n') ? msg : `${msg}\n`}`;
+  process.stderr.write(line);
+  try {
+    appendFileSync(LOG_PATH, line);
+  } catch {}
+}
+// Child (jco-proxy) output arrives in arbitrary chunks; buffer and emit one
+// timestamped line at a time so the stamp lands at each line start. Keyed per
+// stream rather than per prefix: stdout and stderr share a display prefix, and a
+// single buffer would let a partial stdout line be completed by the next stderr
+// chunk, splicing two unrelated lines together.
+const chunkBuffers = new Map();
+function logChunk(stream, prefix, chunk) {
+  const entry = chunkBuffers.get(stream) || { prefix, rest: '' };
+  const lines = (entry.rest + chunk).split('\n');
+  chunkBuffers.set(stream, { prefix, rest: lines.pop() }); // retain trailing partial line
+  for (const line of lines) {
+    const out = `${ts()} ${prefix}${line}\n`;
+    process.stderr.write(out);
+    getLogStream().write(out);
+  }
+}
+// Release buffered partial lines (a final line with no trailing newline — often
+// the message explaining why the child stopped). Called from every exit path,
+// and written synchronously for the same reason logSync exists.
+function flushChunks() {
+  for (const [, { prefix, rest }] of chunkBuffers) {
+    if (rest) {
+      const out = `${ts()} ${prefix}${rest}\n`;
+      process.stderr.write(out);
+      try {
+        appendFileSync(LOG_PATH, out);
+      } catch {}
+    }
+  }
+  chunkBuffers.clear();
 }
 
-// If port is already taken by another bridge, print a yellow banner and
-// tail the running bridge's log instead of crashing. Resolves when the port
-// is free (= we can proceed with normal startup).
-async function ensureNotAlreadyRunning(port) {
+function readState() {
+  try {
+    return JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+  } catch {
+    return null; // absent, unreadable or malformed all mean "can't identify"
+  }
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0); // signal 0 tests for existence without delivering one
+    return true;
+  } catch {
+    return false;
+  }
+}
+function unlinkState() {
+  try {
+    unlinkSync(STATE_PATH);
+  } catch {}
+}
+
+// If the port is already taken, work out *what* holds it before reacting: a
+// bridge on the same client is worth tailing, a bridge on a different client
+// means the requested switch cannot happen, and an unidentified process means
+// we should not pretend to know. Returns when the port is free.
+async function ensureNotAlreadyRunning(port, wantClient) {
   const inUse = await new Promise((resolve) => {
     const probe = http.createServer();
     probe.once('error', (err) => {
@@ -91,32 +239,62 @@ async function ensureNotAlreadyRunning(port) {
       probe.close(() => resolve(false));
     });
   });
-  if (!inUse) return;
+  if (!inUse) {
+    // Drop a state file left behind by a bridge that died without cleaning up,
+    // so the next start doesn't report a dead pid as the current owner.
+    const stale = readState();
+    if (stale && !pidAlive(stale.pid)) unlinkState();
+    return;
+  }
+
+  const state = readState();
+  const live = state && state.port === port && pidAlive(state.pid);
+
+  // The switch case: the two env files share a port, so serving a different
+  // client means stopping the other bridge. Failing loudly here matters because
+  // the ABAP repository is cross-client — working in the wrong client looks
+  // completely normal in the source.
+  if (live && state.client !== wantClient) {
+    const where = state.envFile ? `, ${state.envFile}` : '';
+    for (const ln of [
+      '',
+      `  Port ${port} is already serving SAP client ${state.client} (pid ${state.pid}${where}).`,
+      `  You asked for client ${wantClient}; both env files use port ${port}.`,
+      `  Stop the running bridge first:  kill ${state.pid}`,
+      '',
+    ]) process.stderr.write(`${YELLOW}${ln}${RESET}\n`);
+    process.exit(1);
+  }
+
+  if (!live && !existsSync(LOG_PATH)) {
+    process.stderr.write(
+      `${YELLOW}Port ${port} is held by another process and there is no bridge state file `
+      + `or log to identify it. Exiting.${RESET}\n`,
+    );
+    process.exit(1);
+  }
 
   const banner = [
     '',
     '================================================================',
     `  adt-rfc-bridge is ALREADY RUNNING on port ${port}`,
+    live
+      ? `  Serving client ${state.client} (pid ${state.pid}) — the client you asked for.`
+      : '  Cannot identify the holder (no state file — it may predate this version),',
+    live ? '' : '  so the log below may not be current.',
     '',
     "  Tailing the running bridge's log below.",
     '  Press Ctrl+C to detach (the bridge keeps running).',
     '================================================================',
     '',
-  ];
+  ].filter((ln, i, all) => !(ln === '' && all[i - 1] === ''));
   for (const ln of banner) process.stderr.write(`${YELLOW}${ln}${RESET}\n`);
-
-  if (!existsSync(LOG_PATH)) {
-    process.stderr.write(
-      `${YELLOW}No log file at ${LOG_PATH} — port ${port} is held by something else. Exiting.${RESET}\n`,
-    );
-    process.exit(1);
-  }
 
   // -F follows the file by name across truncation/rotation; -n 40 prints recent context first.
   const tail = spawn('tail', ['-n', '40', '-F', LOG_PATH], { stdio: 'inherit' });
   const detach = (sig) => {
     try { tail.kill('SIGTERM'); } catch {}
-    process.exit(sig === 'SIGTERM' ? 0 : 0);
+    process.exit(0); // detaching from the tail is a deliberate no-op, not a failure
   };
   tail.on('exit', () => process.exit(0));
   process.on('SIGINT', () => detach('SIGINT'));
@@ -125,9 +303,17 @@ async function ensureNotAlreadyRunning(port) {
   await new Promise(() => {});
 }
 
-const bridgePort = Number(getenv('BRIDGE_PORT', '18080'));
-await ensureNotAlreadyRunning(bridgePort);
+const rawPort = getenv('BRIDGE_PORT', '18080');
+const bridgePort = Number(rawPort);
+if (!Number.isInteger(bridgePort) || bridgePort <= 0 || bridgePort > 65535) {
+  process.stderr.write(
+    `[bridge] BRIDGE_PORT is not a valid port: '${rawPort}'${envFile ? ` (from ${envFile})` : ''}\n`,
+  );
+  process.exit(2);
+}
 
+// Built before the already-running check so a broken env file is reported first,
+// and so the check can name the client we were actually asked for.
 const cfg = {
   bridgePort,
   java: getenv('JAVA', 'java'),
@@ -143,6 +329,8 @@ const cfg = {
   password: required('SAP_PASSWORD'),
   language: getenv('SAP_LANGUAGE', 'EN'),
 };
+
+await ensureNotAlreadyRunning(bridgePort, cfg.client);
 
 if (!existsSync(cfg.jcoLibsDir)) {
   log(`[bridge] JCO_LIBS_DIR does not exist: ${cfg.jcoLibsDir}`);
@@ -202,7 +390,10 @@ for (const pid of orphanPids) {
   try { process.kill(Number(pid), 'SIGKILL'); } catch {}
 }
 
-log(`[bridge] starting jco-proxy: ${cfg.java} ${args.filter((a) => a !== cfg.password).join(' ')}`);
+// Substitute rather than drop: filtering the element out left the log reading
+// `--password --language EN`, as if --language were the password's value.
+const logArgs = args.map((a) => (a === cfg.password ? '***' : a));
+log(`[bridge] starting jco-proxy: ${cfg.java} ${logArgs.join(' ')}`);
 
 const child = spawn(cfg.java, args, {
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -213,7 +404,19 @@ const child = spawn(cfg.java, args, {
   },
 });
 
-child.stderr.on('data', (chunk) => logChunk('[jco-proxy] ', chunk));
+// Without an 'error' listener a failed spawn throws as an uncaught exception,
+// and Node's error object carries `spawnargs` — so the whole argv, password
+// included, would land on the terminal and in the log. 'exit' never fires in
+// that case either, leaving the reject path and the 30s timeout unreachable.
+child.on('error', (err) => {
+  logSync(
+    `[bridge] cannot start java (${cfg.java}): ${err.code || err.message} — `
+    + 'check JAVA in your env file, or install a JRE 21+ on PATH',
+  );
+  process.exit(2);
+});
+
+child.stderr.on('data', (chunk) => logChunk('err', '[jco-proxy] ', chunk));
 
 let sidecarPort = null;
 const portReady = new Promise((resolve, reject) => {
@@ -230,13 +433,20 @@ const portReady = new Promise((resolve, reject) => {
         return;
       }
     } else {
-      logChunk('[jco-proxy] ', chunk);
+      logChunk('out', '[jco-proxy] ', chunk);
     }
   });
   child.on('exit', (code, signal) => {
-    if (!sidecarPort) reject(new Error(`jco-proxy exited (code=${code} signal=${signal}) before announcing port`));
-    else {
-      log(`[bridge] jco-proxy exited (code=${code} signal=${signal})`);
+    flushChunks();
+    if (!sidecarPort) {
+      // Until the port is announced every stdout chunk goes into `buf` for the
+      // regex and is never logged — so on the commonest failure of all (the
+      // proxy dying at startup) the diagnostic would otherwise be discarded.
+      if (buf.trim()) logSync(`[jco-proxy] ${buf.trim()}`);
+      reject(new Error(`jco-proxy exited (code=${code} signal=${signal}) before announcing port`));
+    } else {
+      logSync(`[bridge] jco-proxy exited (code=${code} signal=${signal})`);
+      if (readState()?.pid === process.pid) unlinkState();
       process.exit(code ?? 1);
     }
   });
@@ -320,7 +530,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     const statusCode = proxyResp.statusCode || 500;
-    const statusText = proxyResp.reasonPhrase || '';
+    // Node rejects a statusMessage containing anything outside \t and
+    // \x20-\x7e\x80-\xff with ERR_INVALID_CHAR. JCo errors arrive multi-line —
+    // the case we hit in practice — and can also carry non-Latin-1 text once the
+    // logon language isn't EN/DE, so filter to exactly what Node accepts. The
+    // replace must precede the slice: cutting at 512 can bisect a surrogate pair
+    // and reintroduce the throw. 512 is an arbitrary cap to keep headers sane.
+    const statusText = (proxyResp.reasonPhrase || '')
+      .replace(/[^\t\x20-\x7e\x80-\xff]/g, ' ')
+      .slice(0, 512);
     res.writeHead(statusCode, statusText, respHeaders);
     // HEAD responses carry headers only, no body.
     res.end(isHead ? undefined : proxyResp.body || '');
@@ -338,16 +556,40 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// The probe in ensureNotAlreadyRunning only treats EADDRINUSE as "taken", so a
+// port we cannot bind for another reason (EACCES below 1024) gets this far —
+// with jco-proxy already spawned, which would be orphaned by an unhandled throw.
+server.on('error', (err) => {
+  logSync(
+    `[bridge] cannot listen on ${cfg.bridgePort}: ${err.code || err.message}`
+    + (err.code === 'EACCES' ? ' — ports below 1024 need root; pick a higher BRIDGE_PORT' : ''),
+  );
+  try {
+    child.kill('SIGKILL');
+  } catch {}
+  process.exit(2);
+});
+
 server.listen(cfg.bridgePort, '127.0.0.1', () => {
   log(`[bridge] listening on http://localhost:${cfg.bridgePort}`);
   log(`[bridge] arc-1 connection: SAP_URL=http://localhost:${cfg.bridgePort} SAP_CLIENT=${cfg.client} SAP_USER=${cfg.user}`);
+  try {
+    writeFileSync(
+      STATE_PATH,
+      `${JSON.stringify({ pid: process.pid, port: cfg.bridgePort, client: cfg.client, envFile })}\n`,
+    );
+  } catch {}
 });
 
 let shuttingDown = false;
 function shutdown(sig) {
   if (shuttingDown) return;
   shuttingDown = true;
-  log(`[bridge] received ${sig}, shutting down`);
+  logSync(`[bridge] received ${sig}, shutting down`);
+  // A child that ignores SIGINT is SIGKILLed below and its 'exit' handler never
+  // runs, so flush here too or its last partial line dies with it.
+  flushChunks();
+  if (readState()?.pid === process.pid) unlinkState();
   try {
     server.close();
   } catch {}
